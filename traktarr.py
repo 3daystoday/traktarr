@@ -202,8 +202,10 @@ def show(show_id, folder=None, no_search=False):
 @click.option('--ignore-blacklist', is_flag=True, help='Ignores the blacklist when running the command.')
 @click.option('--remove-rejected-from-recommended', is_flag=True,
               help='Removes rejected/existing shows from recommended.')
+@click.option('--cache', is_flag=True, help='Use the cache for this list')
 def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folder=None, actor=None, no_search=False,
-          notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False):
+          notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False,
+          cache=False):
     from media.sonarr import Sonarr
     from media.trakt import Trakt
     from helpers import misc as misc_helper
@@ -233,33 +235,47 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
     pvr_objects_list = get_objects(sonarr, 'Sonarr', notifications)
 
     # get trakt series list
-    if list_type.lower() == 'anticipated':
+    trakt_objects_list = []
+
+    cached_items = [] if not cache else cache_class.get_cached_items('shows', list_type.lower())
+    if cached_items:
+        log.info("Loaded %d items from cache for %s shows", len(cached_items), list_type)
+        # prune expired cache items
+        pruned_cache_items_count = cache_class.prune_expired_cache_items('shows', list_type.lower(),
+                                                                         cached_items)
+        if pruned_cache_items_count:
+            log.info("Pruned %d expired cache item(s)", pruned_cache_items_count)
+
+    if not cached_items and list_type.lower() == 'anticipated':
         trakt_objects_list = trakt.get_anticipated_shows(genres=genre, languages=cfg.filters.shows.allowed_languages)
-    elif list_type.lower() == 'trending':
+    elif not cached_items and list_type.lower() == 'trending':
         trakt_objects_list = trakt.get_trending_shows(genres=genre, languages=cfg.filters.shows.allowed_languages)
-    elif list_type.lower() == 'popular':
+    elif not cached_items and list_type.lower() == 'popular':
         trakt_objects_list = trakt.get_popular_shows(genres=genre, languages=cfg.filters.shows.allowed_languages)
-    elif list_type.lower() == 'person':
+    elif not cached_items and list_type.lower() == 'person':
         if not actor:
             log.error("You must specify an actor with the --actor / -a parameter when using the person list type!")
             return None
         trakt_objects_list = trakt.get_person_shows(person=actor, genres=genre,
                                                     languages=cfg.filters.shows.allowed_languages)
-    elif list_type.lower() == 'recommended':
+    elif not cached_items and list_type.lower() == 'recommended':
         trakt_objects_list = trakt.get_recommended_shows(authenticate_user, genres=genre,
                                                          languages=cfg.filters.shows.allowed_languages)
-    elif list_type.lower().startswith('played'):
+    elif not cached_items and list_type.lower().startswith('played'):
         most_type = misc_helper.substring_after(list_type.lower(), "_")
         trakt_objects_list = trakt.get_most_played_shows(genres=genre, languages=cfg.filters.shows.allowed_languages,
                                                          most_type=most_type if most_type else None)
-    elif list_type.lower().startswith('watched'):
+    elif not cached_items and list_type.lower().startswith('watched'):
         most_type = misc_helper.substring_after(list_type.lower(), "_")
         trakt_objects_list = trakt.get_most_watched_shows(genres=genre, languages=cfg.filters.shows.allowed_languages,
                                                           most_type=most_type if most_type else None)
-    elif list_type.lower() == 'watchlist':
+    elif not cached_items and list_type.lower() == 'watchlist':
         trakt_objects_list = trakt.get_watchlist_shows(authenticate_user)
-    else:
+    elif not cached_items:
         trakt_objects_list = trakt.get_user_list_shows(list_type, authenticate_user)
+
+    if not trakt_objects_list and cached_items:
+        trakt_objects_list = cached_items
 
     if not trakt_objects_list:
         log.error("Aborting due to failure to retrieve Trakt %s shows list", list_type)
@@ -301,13 +317,19 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
         sorted_series_list = misc_helper.sorted_list(processed_series_list, 'show', 'votes')
         log.info("Sorted shows list to process by highest votes")
 
+    if cache:
+        cache_class.add_cached_items('shows', list_type, sorted_series_list)
+
     # loop series_list
+    cache_changed = False
     log.info("Processing list now...")
     for series in sorted_series_list:
         try:
             # check if genre matches genre supplied via argument
             if genre and not misc_helper.allowed_genres(genre, 'show', series):
                 log.debug("Skipping: %s because it was not from %s genre(s)", series['show']['title'], genre.lower())
+                if cache and cache_class.remove_cached_item('shows', list_type, series):
+                    cache_changed = True
                 continue
 
             # check if series passes out blacklist criteria inspection
@@ -330,9 +352,13 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
                     if notifications:
                         callback_notify({'event': 'add_show', 'list_type': list_type, 'show': series['show']})
                     added_shows += 1
+                    if cache and cache_class.remove_cached_item('shows', list_type, series):
+                        cache_changed = True
                 else:
                     log.error("FAILED adding %s (%d) with tags: %s", series['show']['title'], series['show']['year'],
                               sonarr_helper.readable_tag_from_ids(profile_tags, use_tags))
+                    if cache and cache_class.remove_cached_item('shows', list_type, series):
+                        cache_changed = True
 
                 # stop adding shows, if added_shows >= add_limit
                 if add_limit and added_shows >= add_limit:
@@ -343,12 +369,17 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
 
         except Exception:
             log.exception("Exception while processing show %s: ", series['show']['title'])
+            if cache and cache_class.remove_cached_item('shows', list_type, series):
+                cache_changed = True
 
     log.info("Added %d new show(s) to Sonarr", added_shows)
 
     # send notification
     if notifications:
         notify.send(message="Added %d shows from Trakt's %s list" % (added_shows, list_type))
+
+    if cache_changed:
+        cache_class.save_cache('shows', list_type)
 
     return added_shows
 
