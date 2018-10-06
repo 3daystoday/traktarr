@@ -4,3 +4,4 @@ attrdict==2.0.0
 click==6.7
 requests~=2.18.4
 pyfiglet
+sqlitedict~=1.6.0

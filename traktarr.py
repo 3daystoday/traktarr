@@ -6,7 +6,6 @@ import time
 
 import click
 import schedule
-
 from pyfiglet import Figlet
 
 ############################################################
@@ -15,6 +14,7 @@ from pyfiglet import Figlet
 cfg = None
 log = None
 notify = None
+cache_class = None
 
 
 # Click
@@ -36,9 +36,17 @@ notify = None
     show_default=True,
     default=os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "activity.log")
 )
-def app(config, logfile):
+@click.option(
+    '--cachefile',
+    envvar='TRAKTARR_CACHEFILE',
+    type=click.Path(file_okay=True, dir_okay=False),
+    help='Cache file',
+    show_default=True,
+    default=os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "cache.db")
+)
+def app(config, logfile, cachefile):
     # Setup global variables
-    global cfg, log, notify
+    global cfg, log, notify, cache_class
 
     # Load config
     from misc.config import Config
@@ -51,6 +59,10 @@ def app(config, logfile):
     # Load notifications
     from notifications import Notifications
     notify = Notifications()
+
+    # Load cache
+    from misc.cache import Cache
+    cache_class = Cache(cachefile, cfg)
 
     # Notifications
     init_notifications()
@@ -394,7 +406,8 @@ def movie(movie_id, folder=None, no_search=False):
 @click.option('--add-delay', '-d', default=2.5, help='Seconds between each add request to Radarr.', show_default=True)
 @click.option('--sort', '-s', default='votes', type=click.Choice(['votes', 'rating', 'release']),
               help='Sort list to process.')
-@click.option('--rating','-r',default=None,type=(int),help='Set a minimum rating threshold (according to Rotten Tomatoes)')
+@click.option('--rating', '-r', default=None, type=(int),
+              help='Set a minimum rating threshold (according to Rotten Tomatoes)')
 @click.option('--genre', '-g', default=None, help='Only add movies from this genre to Radarr.')
 @click.option('--folder', '-f', default=None, help='Add movies with this root folder to Radarr.')
 @click.option('--actor', '-a', default=None, help='Only add movies from this actor to Radarr.')
@@ -405,8 +418,11 @@ def movie(movie_id, folder=None, no_search=False):
 @click.option('--ignore-blacklist', is_flag=True, help='Ignores the blacklist when running the command.')
 @click.option('--remove-rejected-from-recommended', is_flag=True,
               help='Removes rejected/existing movies from recommended.')
-def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, genre=None, folder=None, actor=None, no_search=False,
-           notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False):
+@click.option('--cache', is_flag=True, help='Use the cache for this list')
+def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, genre=None, folder=None, actor=None,
+           no_search=False,
+           notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False,
+           cache=False):
     from media.radarr import Radarr
     from media.trakt import Trakt
     from helpers import misc as misc_helper
@@ -436,36 +452,45 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
     pvr_objects_list = get_objects(radarr, 'Radarr', notifications)
 
     # get trakt movies list
-    if list_type.lower() == 'anticipated':
+    trakt_objects_list = []
+
+    cached_items = [] if not cache else cache_class.get_cached_items('movies', list_type.lower())
+    if cached_items:
+        log.info("Loaded %d items from cache for %s movies", len(cached_items), list_type)
+
+    if not cached_items and list_type.lower() == 'anticipated':
         trakt_objects_list = trakt.get_anticipated_movies(genres=genre, languages=cfg.filters.movies.allowed_languages)
-    elif list_type.lower() == 'trending':
+    elif not cached_items and list_type.lower() == 'trending':
         trakt_objects_list = trakt.get_trending_movies(genres=genre, languages=cfg.filters.movies.allowed_languages)
-    elif list_type.lower() == 'popular':
+    elif not cached_items and list_type.lower() == 'popular':
         trakt_objects_list = trakt.get_popular_movies(genres=genre, languages=cfg.filters.movies.allowed_languages)
-    elif list_type.lower() == 'boxoffice':
+    elif not cached_items and list_type.lower() == 'boxoffice':
         trakt_objects_list = trakt.get_boxoffice_movies()
-    elif list_type.lower() == 'person':
+    elif not cached_items and list_type.lower() == 'person':
         if not actor:
             log.error("You must specify an actor with the --actor / -a parameter when using the person list type!")
             return None
         trakt_objects_list = trakt.get_person_movies(person=actor, genres=genre,
                                                      languages=cfg.filters.movies.allowed_languages)
 
-    elif list_type.lower() == 'recommended':
+    elif not cached_items and list_type.lower() == 'recommended':
         trakt_objects_list = trakt.get_recommended_movies(authenticate_user, genres=genre,
                                                           languages=cfg.filters.movies.allowed_languages)
-    elif list_type.lower().startswith('played'):
+    elif not cached_items and list_type.lower().startswith('played'):
         most_type = misc_helper.substring_after(list_type.lower(), "_")
         trakt_objects_list = trakt.get_most_played_movies(genres=genre, languages=cfg.filters.movies.allowed_languages,
                                                           most_type=most_type if most_type else None)
-    elif list_type.lower().startswith('watched'):
+    elif not cached_items and list_type.lower().startswith('watched'):
         most_type = misc_helper.substring_after(list_type.lower(), "_")
         trakt_objects_list = trakt.get_most_watched_movies(genres=genre, languages=cfg.filters.movies.allowed_languages,
                                                            most_type=most_type if most_type else None)
-    elif list_type.lower() == 'watchlist':
+    elif not cached_items and list_type.lower() == 'watchlist':
         trakt_objects_list = trakt.get_watchlist_movies(authenticate_user)
-    else:
+    elif not cached_items:
         trakt_objects_list = trakt.get_user_list_movies(list_type, authenticate_user)
+
+    if not trakt_objects_list and cached_items:
+        trakt_objects_list = cached_items
 
     if not trakt_objects_list:
         log.error("Aborting due to failure to retrieve Trakt %s movies list", list_type)
@@ -507,13 +532,19 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
         sorted_movies_list = misc_helper.sorted_list(processed_movies_list, 'movie', 'votes')
         log.info("Sorted movies list to process by highest votes")
 
+    if cache:
+        cache_class.add_cached_items('movies', list_type, sorted_movies_list)
+
     # loop movies
+    cache_changed = False
     log.info("Processing list now...")
     for movie in sorted_movies_list:
         try:
             # check if genre matches genre supplied via argument
             if genre and not misc_helper.allowed_genres(genre, 'movie', movie):
                 log.debug("Skipping: %s because it was not from %s genre(s)", movie['movie']['title'], genre.lower())
+                if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                    cache_changed = True
                 continue
 
             # check if movie passes out blacklist criteria inspection
@@ -522,28 +553,38 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
                                                      else None):
                 # Assuming the movie is not blacklisted, proceed to pull RT score if the user wishes to restrict
                 movieRating = None
-                if (rating != None and cfg['omdb']['api_key'] != ''):
-                    movieRating = rating_helper.get_rating(cfg['omdb']['api_key'],movie)
-                    if (movieRating == -1):
+                if rating is not None and cfg['omdb']['api_key'] != '':
+                    movieRating = rating_helper.get_rating(cfg['omdb']['api_key'], movie)
+                    if movieRating == -1:
                         log.debug("Skipping: %s because it did not have a rating/lacked imdbID",
                                   movie['movie']['title'])
+                        if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                            cache_changed = True
                         continue
-                if (rating == None or movieRating >= rating):
-                    log.info("Adding: %s (%d) | Genres: %s | Country: %s", movie['movie']['title'], movie['movie']['year'],
+                if rating is None or movieRating >= rating:
+                    log.info("Adding: %s (%d) | Genres: %s | Country: %s", movie['movie']['title'],
+                             movie['movie']['year'],
                              ', '.join(movie['movie']['genres']), movie['movie']['country'].upper())
                     # add movie to radarr
                     if radarr.add_movie(movie['movie']['ids']['tmdb'], movie['movie']['title'], movie['movie']['year'],
-                                        movie['movie']['ids']['slug'], profile_id, cfg.radarr.root_folder, not no_search):
+                                        movie['movie']['ids']['slug'], profile_id, cfg.radarr.root_folder,
+                                        not no_search):
                         log.info("ADDED %s (%d)", movie['movie']['title'], movie['movie']['year'])
                         if notifications:
                             callback_notify({'event': 'add_movie', 'list_type': list_type, 'movie': movie['movie']})
                         added_movies += 1
+                        if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                            cache_changed = True
                     else:
                         log.error("FAILED adding %s (%d)", movie['movie']['title'], movie['movie']['year'])
+                        if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                            cache_changed = True
                 else:
                     log.info("SKIPPING: %s (%d) | Genres: %s | Country: %s", movie['movie']['title'],
                              movie['movie']['year'],
                              ', '.join(movie['movie']['genres']), movie['movie']['country'].upper())
+                    if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                        cache_changed = True
                 # stop adding movies, if added_movies >= add_limit
                 if add_limit and added_movies >= add_limit:
                     break
@@ -553,12 +594,17 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
 
         except Exception:
             log.exception("Exception while processing movie %s: ", movie['movie']['title'])
+            if cache and cache_class.remove_cached_item('movies', list_type, movie):
+                cache_changed = True
 
     log.info("Added %d new movie(s) to Radarr", added_movies)
 
     # send notification
     if notifications:
         notify.send(message="Added %d movies from Trakt's %s list" % (added_movies, list_type))
+
+    if cache_changed:
+        cache_class.save_cache('movies', list_type)
 
     return added_movies
 
@@ -705,7 +751,8 @@ def automatic_shows(add_delay=2.5, sort='votes', no_search=False, notifications=
     return
 
 
-def automatic_movies(add_delay=2.5, sort='votes', no_search=False, notifications=False, ignore_blacklist=False,rating_limit=None):
+def automatic_movies(add_delay=2.5, sort='votes', no_search=False, notifications=False, ignore_blacklist=False,
+                     rating_limit=None):
     from media.trakt import Trakt
 
     total_movies_added = 0
@@ -736,7 +783,7 @@ def automatic_movies(add_delay=2.5, sort='votes', no_search=False, notifications
                 # run movies
                 added_movies = movies.callback(list_type=list_type, add_limit=limit,
                                                add_delay=add_delay, sort=sort, no_search=no_search,
-                                               notifications=notifications,rating=rating_limit)
+                                               notifications=notifications, rating=rating_limit)
             elif list_type.lower() == 'watchlist':
                 for authenticate_user, limit in value.items():
                     if limit <= 0:
@@ -754,7 +801,7 @@ def automatic_movies(add_delay=2.5, sort='votes', no_search=False, notifications
                     added_movies = movies.callback(list_type=list_type, add_limit=limit,
                                                    add_delay=add_delay, sort=sort, no_search=no_search,
                                                    notifications=notifications, authenticate_user=authenticate_user,
-                                                   ignore_blacklist=local_ignore_blacklist,rating=rating_limit)
+                                                   ignore_blacklist=local_ignore_blacklist, rating=rating_limit)
             elif list_type.lower() == 'lists':
                 for list, v in value.items():
                     if isinstance(v, dict):
@@ -773,7 +820,7 @@ def automatic_movies(add_delay=2.5, sort='votes', no_search=False, notifications
                     added_movies = movies.callback(list_type=list, add_limit=limit,
                                                    add_delay=add_delay, sort=sort, no_search=no_search,
                                                    notifications=notifications, authenticate_user=authenticate_user,
-                                                   ignore_blacklist=local_ignore_blacklist,rating=rating_limit)
+                                                   ignore_blacklist=local_ignore_blacklist, rating=rating_limit)
 
             if added_movies is None:
                 log.error("Failed adding movies from Trakt's %s list", list_type)
@@ -880,7 +927,6 @@ def exit_handler(signum, frame):
 ############################################################
 
 if __name__ == "__main__":
-
     print("")
 
     f = Figlet(font='graffiti')
