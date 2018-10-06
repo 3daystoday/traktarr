@@ -37,6 +37,9 @@ class Config(object, metaclass=Singleton):
         'core': {
             'debug': False
         },
+        'cache': {
+            'expires_in_days': 7
+        },
         'trakt': {
             'client_id': '',
             'client_secret': ''
@@ -141,7 +144,7 @@ class Config(object, metaclass=Singleton):
         if not os.path.exists(self.config_path):
             print("Dumping default config to: %s" % self.config_path)
             with open(self.config_path, 'w') as fp:
-                json.dump(self.base_config, fp, sort_keys=True, indent=2)
+                json.dump(self.base_config, fp, sort_keys=True, indent=2, default=str)
             return True
         else:
             return False
@@ -149,7 +152,7 @@ class Config(object, metaclass=Singleton):
     def dump_config(self):
         if os.path.exists(self.config_path):
             with open(self.config_path, 'w') as fp:
-                json.dump(self.conf, fp, sort_keys=True, indent=2)
+                json.dump(self.conf, fp, sort_keys=True, indent=2, default=str)
             return True
         else:
             return False

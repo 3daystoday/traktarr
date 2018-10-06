@@ -457,6 +457,11 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
     cached_items = [] if not cache else cache_class.get_cached_items('movies', list_type.lower())
     if cached_items:
         log.info("Loaded %d items from cache for %s movies", len(cached_items), list_type)
+        # prune expired cache items
+        pruned_cache_items_count = cache_class.prune_expired_cache_items('movies', list_type.lower(),
+                                                                         cached_items)
+        if pruned_cache_items_count:
+            log.info("Pruned %d expired cache item(s)", pruned_cache_items_count)
 
     if not cached_items and list_type.lower() == 'anticipated':
         trakt_objects_list = trakt.get_anticipated_movies(genres=genre, languages=cfg.filters.movies.allowed_languages)
