@@ -203,9 +203,10 @@ def show(show_id, folder=None, no_search=False):
 @click.option('--remove-rejected-from-recommended', is_flag=True,
               help='Removes rejected/existing shows from recommended.')
 @click.option('--cache', is_flag=True, help='Use the cache for this list')
+@click.option('--cache-refresh', is_flag=True, help='Add new items to the existing cache for this list')
 def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folder=None, actor=None, no_search=False,
           notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False,
-          cache=False):
+          cache=False, cache_refresh=False):
     from media.sonarr import Sonarr
     from media.trakt import Trakt
     from helpers import misc as misc_helper
@@ -234,9 +235,12 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
 
     pvr_objects_list = get_objects(sonarr, 'Sonarr', notifications)
 
-    # get trakt series list
-    trakt_objects_list = []
+    # disable cache for non allowed list types
+    if cache and list_type.lower() in ['person', 'played', 'watched', 'watchlist']:
+        cache = False
+        cache_refresh = False
 
+    # load cache items
     cached_items = [] if not cache else cache_class.get_cached_items('shows', list_type.lower())
     if cached_items:
         log.info("Loaded %d items from cache for %s shows", len(cached_items), list_type)
@@ -245,6 +249,13 @@ def shows(list_type, add_limit=0, add_delay=2.5, sort='votes', genre=None, folde
                                                                          cached_items)
         if pruned_cache_items_count:
             log.info("Pruned %d expired cache item(s)", pruned_cache_items_count)
+
+        if cache_refresh:
+            # set the cached_items to an empty list, to force new trakt data to be retrieved
+            cached_items = []
+
+    # get trakt series list
+    trakt_objects_list = []
 
     if not cached_items and list_type.lower() == 'anticipated':
         trakt_objects_list = trakt.get_anticipated_shows(genres=genre, languages=cfg.filters.shows.allowed_languages)
@@ -450,10 +461,11 @@ def movie(movie_id, folder=None, no_search=False):
 @click.option('--remove-rejected-from-recommended', is_flag=True,
               help='Removes rejected/existing movies from recommended.')
 @click.option('--cache', is_flag=True, help='Use the cache for this list')
+@click.option('--cache-refresh', is_flag=True, help='Add new items to the existing cache for this list')
 def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, genre=None, folder=None, actor=None,
            no_search=False,
            notifications=False, authenticate_user=None, ignore_blacklist=False, remove_rejected_from_recommended=False,
-           cache=False):
+           cache=False, cache_refresh=False):
     from media.radarr import Radarr
     from media.trakt import Trakt
     from helpers import misc as misc_helper
@@ -482,9 +494,12 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
 
     pvr_objects_list = get_objects(radarr, 'Radarr', notifications)
 
-    # get trakt movies list
-    trakt_objects_list = []
+    # disable cache for non allowed list types
+    if cache and list_type.lower() in ['person', 'boxoffice', 'played', 'watched', 'watchlist']:
+        cache = False
+        cache_refresh = False
 
+    # load cache items
     cached_items = [] if not cache else cache_class.get_cached_items('movies', list_type.lower())
     if cached_items:
         log.info("Loaded %d items from cache for %s movies", len(cached_items), list_type)
@@ -493,6 +508,13 @@ def movies(list_type, add_limit=0, add_delay=2.5, sort='votes', rating=None, gen
                                                                          cached_items)
         if pruned_cache_items_count:
             log.info("Pruned %d expired cache item(s)", pruned_cache_items_count)
+
+        if cache_refresh:
+            # set the cached_items to an empty list, to force new trakt data to be retrieved
+            cached_items = []
+
+    # get trakt movies list
+    trakt_objects_list = []
 
     if not cached_items and list_type.lower() == 'anticipated':
         trakt_objects_list = trakt.get_anticipated_movies(genres=genre, languages=cfg.filters.movies.allowed_languages)

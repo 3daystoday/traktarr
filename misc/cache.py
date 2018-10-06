@@ -13,25 +13,15 @@ class Cache:
         self.cache_file = cache_file
         self.cfg = cfg
         # load caches
-        self.caches = {
-            # movies
-            'movies_popular': SqliteDict(self.cache_file, tablename='movies_popular', encode=json.dumps,
-                                         decode=json.loads, autocommit=False),
-            'movies_trending': SqliteDict(self.cache_file, tablename='movies_trending', encode=json.dumps,
-                                          decode=json.loads, autocommit=False),
-            # shows
-            'shows_popular': SqliteDict(self.cache_file, tablename='shows_popular', encode=json.dumps,
-                                        decode=json.loads, autocommit=False),
-            'shows_trending': SqliteDict(self.cache_file, tablename='shows_trending', encode=json.dumps,
-                                         decode=json.loads, autocommit=False)
-        }
+        self.caches = {}
 
     def get_correct_cache(self, media_type: str, list_type: str):
         cache_name = '%s_%s' % (media_type, list_type)
         cache = self.caches[cache_name] if cache_name in self.caches else None
         if cache is None:
-            log.error("Failed to retrieve cache for %s", cache_name)
-            return None
+            cache = SqliteDict(self.cache_file, tablename=cache_name, encode=json.dumps,
+                               decode=json.loads, autocommit=False)
+            self.caches[cache_name] = cache
         return cache
 
     def get_cached_items(self, media_type: str, list_type: str):
