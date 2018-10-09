@@ -258,7 +258,8 @@ You can repeat this process for as many users as you like.
         "cartoon network",
         "espn",
         "yahoo!",
-        "fox sports"
+        "fox sports",
+        "wwe network"
       ],
       "blacklisted_tvdb_ids": []
     }
@@ -588,7 +589,8 @@ Use filters to specify the movie/shows's country of origin or blacklist (i.e. fi
     "cartoon network",
     "espn",
     "yahoo!",
-    "fox sports"
+    "fox sports",
+    "wwe network"
   ],
   "blacklisted_tvdb_ids": []
 }
